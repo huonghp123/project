@@ -1,0 +1,115 @@
+# importing libraries
+import paho.mqtt.client as paho
+import os
+import socket
+import ssl
+import random
+import string
+import json
+import time
+import board
+import busio
+from adafruit_htu21d import HTU21D
+import adafruit_tsl2561
+import adafruit_mpl3115a2
+import Adafruit_GPIO.SPI as SPI
+import Adafruit_MCP3008
+import math
+import datetime
+
+#iot---------------------------------------------------
+connflag = False
+ 
+def on_connect(client, userdata, flags, rc):                # func for making connection
+    global connflag
+    print ("Connected to AWS")
+    connflag = True
+    print("Connection returned result: " + str(rc) )
+ 
+def on_message(client, userdata, msg):                      # Func for Sending msg
+    print(msg.topic+" "+str(msg.payload))
+    
+    
+mqttc = paho.Client()                                       # mqttc object
+mqttc.on_connect = on_connect                               # assign on_connect func
+mqttc.on_message = on_message                               # assign on_message func
+
+#### Change following parameters #### 
+awshost = "a39vhdiwanzjme-ats.iot.us-east-2.amazonaws.com"      # Endpoint
+awsport = 8883                                              # Port no.   
+clientId = "WWWclient"                                     # Thing_Name
+thingName = "WWWclient"                                    # Thing_Name
+caPath = "AmazonRootCA1.pem"                                      # Root_CA_Certificate_Name
+certPath = "f7910cfdaf-certificate.pem.crt"                            # <Thing_Name>.cert.pem
+keyPath = "f7910cfdaf-private.pem.key"                          # <Thing_Name>.private.key
+ 
+mqttc.tls_set(caPath, certfile=certPath, keyfile=keyPath, cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1_2, ciphers=None)  # pass parameters
+ 
+mqttc.connect(awshost, awsport, keepalive=60)               # connect to aws server
+ 
+mqttc.loop_start()                                          # Start the loop
+ 
+ #----------------------------------thiet lap cam bienn ------------------------------------
+SPI_PORT   = 0
+SPI_DEVICE = 0
+mcp = Adafruit_MCP3008.MCP3008(spi=SPI.SpiDev(SPI_PORT, SPI_DEVICE))
+#tao bus i2c
+i2c = busio.I2C(board.SCL, board.SDA)
+#tao cac ca the cam bien, truyen vao busI2C
+htu = HTU21D(i2c,0x40)
+tsl = adafruit_tsl2561.TSL2561(i2c,0x39)
+mpl = adafruit_mpl3115a2.MPL3115A2(i2c)
+#-----------------------let go------------------------
+#bat cam bien anh sang
+tsl.enabled = True
+time.sleep(1)
+#set gain 0=1x, 1=16x
+tsl.gain = 0
+#set integration time (0=13.7ms,1=101ms.2=402ms,or 3=manual)
+tsl.integration_time = 1
+
+#set this to a value in pascasls:
+mpl.sealevel_pressure = 102250
+
+sampleWindow = 0.5
+
+while True:
+    starttime = time.time()
+    signalmax = 0
+    signalmin = 1024
+    while(time.time() - starttime) < sampleWindow:
+        value = mcp.read_adc(0)
+        if value < 1024:
+            if value>signalmax: signalmax = value
+            if value<signalmin: signalmin = value
+    ptp = signalmax - signalmin
+    volts = (ptp*3.3)/1024
+    decibel = 16*(math.log(volts/0.00631))
+    
+    if connflag == True:
+        Time = datetime.datetime.now()
+        paylodmsg0="{"
+        paylodmsg1 = "\"Time\": \""
+        paylodmsg2 = "\", \"Am thanh\":"
+        paylodmsg3 = ", \"Nhiet do\":"
+        paylodmsg4 = ", \"Do am\":"
+        paylodmsg5 = ", \"Anh sang\":"
+        paylodmsg6 = ", \"Ap suat\":"
+        paylodmsg7 = ", \"Do cao\":"
+        paylodmsg8="}"
+        paylodmsg = "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}".format(paylodmsg0, paylodmsg1, Time,
+                                                                       paylodmsg2, round(decibel,2),
+                                                                       paylodmsg3, round(htu.temperature,2),
+                                                                       paylodmsg4, round(htu.relative_humidity,2),
+                                                                       paylodmsg5, round(tsl.lux,2),
+                                                                       paylodmsg6, round(mpl.pressure,2),
+                                                                       paylodmsg7, round(mpl.altitude,2),
+                                                                       paylodmsg8)
+        paylodmsg = json.dumps(paylodmsg) 
+        paylodmsg_json = json.loads(paylodmsg)       
+        mqttc.publish("WWWproject", paylodmsg_json , qos=1)        # topic: temperature # Publishing Temperature values
+        print("msg sent: WWWproject" ) # Print sent temperature msg on console
+        print(paylodmsg_json)
+
+    else:
+        print("waiting for connection...")                      
